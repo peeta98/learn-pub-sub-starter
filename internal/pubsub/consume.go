@@ -4,15 +4,22 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/rabbitmq/amqp091-go"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
+
+type AckType int
 
 type SimpleQueueType int
 
 const (
 	SimpleQueueDurable SimpleQueueType = iota
 	SimpleQueueTransient
+)
+
+const (
+	Ack AckType = iota
+	NackRequeue
+	NackDiscard
 )
 
 func DeclareAndBind(
@@ -53,12 +60,12 @@ func DeclareAndBind(
 }
 
 func SubscribeJSON[T any](
-	conn *amqp091.Connection,
+	conn *amqp.Connection,
 	exchange,
 	queueName,
 	key string,
 	simpleQueueType SimpleQueueType,
-	handler func(T),
+	handler func(T) AckType,
 ) error {
 	ch, queue, err := DeclareAndBind(conn, exchange, queueName, key, simpleQueueType)
 	if err != nil {
@@ -90,10 +97,19 @@ func SubscribeJSON[T any](
 				continue
 			}
 
-			handler(target)
-			// This method makes sure that RabbitMQ knows that this message was processed correctly
-			// and that it can be removed from the queue
-			message.Ack(false)
+			acktype := handler(target)
+
+			switch acktype {
+			case Ack:
+				message.Ack(false)
+				fmt.Print("Ack message!")
+			case NackRequeue:
+				message.Nack(false, true)
+				fmt.Print("NackRequeue message!")
+			case NackDiscard:
+				message.Nack(false, false)
+				fmt.Print("NackDiscard message!")
+			}
 		}
 	}()
 	return nil
