@@ -1,12 +1,12 @@
 package pubsub
 
 import (
+	"encoding/json"
 	"fmt"
 
+	"github.com/rabbitmq/amqp091-go"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
-
-type Acktype int
 
 type SimpleQueueType int
 
@@ -50,4 +50,51 @@ func DeclareAndBind(
 		return nil, amqp.Queue{}, fmt.Errorf("could not bind queue: %v", err)
 	}
 	return ch, queue, nil
+}
+
+func SubscribeJSON[T any](
+	conn *amqp091.Connection,
+	exchange,
+	queueName,
+	key string,
+	simpleQueueType SimpleQueueType,
+	handler func(T),
+) error {
+	ch, queue, err := DeclareAndBind(conn, exchange, queueName, key, simpleQueueType)
+	if err != nil {
+		return fmt.Errorf("could not declare and bind queue: %v", err)
+	}
+
+	messages, err := ch.Consume(
+		queue.Name,
+		"",
+		false,
+		false,
+		false,
+		false,
+		nil,
+	)
+	if err != nil {
+		return fmt.Errorf("could not consume messages: %v", err)
+	}
+
+	go func() {
+		defer ch.Close()
+		for message := range messages {
+			var target T
+			err = json.Unmarshal(message.Body, &target)
+			if err != nil {
+				// In production it would be wise to use more advanced logging strategies for observability reasons
+				fmt.Printf("error unmarshling message body: %v\n", err)
+				message.Ack(false)
+				continue
+			}
+
+			handler(target)
+			// This method makes sure that RabbitMQ knows that this message was processed correctly
+			// and that it can be removed from the queue
+			message.Ack(false)
+		}
+	}()
+	return nil
 }
